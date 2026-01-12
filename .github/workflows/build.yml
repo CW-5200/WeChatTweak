@@ -1,60 +1,45 @@
-name: WeChatTweak CI
+name: build deb
 
-on:
+on: 
   push:
-    branches: [ main ]
-  workflow_dispatch:
-
-permissions:
-  actions: write
-  contents: read
+  pull_request:
 
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 20
-    env:
-      THEOS: ${{ github.workspace }}/theos
-      SDKVERSION: 16.4
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: true
 
-    # 设置 Theos 环境并安装依赖
-    - name: Setup Theos and Install Dependencies
-      run: |
-        # 克隆并更新 Theos
-        git clone --filter=blob:none --depth 1 \
-          https://github.com/theos/theos.git $THEOS
-        $THEOS/bin/update-theos
-        # 输出 THEOS 目录结构来检查是否正确设置
-        ls -la $THEOS
-        # 安装 Xcode 命令行工具（如果未安装）
-        xcode-select --install || echo "xcode-select already installed"
-        # 显示 xcode-select 安装的工具版本
-        xcode-select -v
-        # 显示当前的 SDK 和开发环境版本
-        sw_vers
-        # 确保可以使用 xcodebuild
-        xcodebuild -version
+      - name: Check cache
+        run: |
+          echo upstream_heads=`git ls-remote https://github.com/roothide/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/theos/sdks | head -n 1 | cut -f 1` >> $GITHUB_ENV
 
-        # 安装 ldid 工具
-        brew install ldid || echo "ldid is already installed"
+      - name: Use cache
+        id: cache
+        uses: actions/cache@v4.2.1
+        with:
+          path: ${{ github.workspace }}/theos
+          key: ${{ runner.os }}-${{ env.upstream_heads }}
 
-    # 构建 .deb 包
-    - name: Build Tweak Package
-      run: |
-        export PATH="$THEOS/bin:$PATH"
-        make clean
-        make package \
-          THEOS_PACKAGE_SCHEME=rootless \
-          DEBUG=0 \
-          CODESIGNING_ALLOWED=NO
+      - name: Prepare Theos
+        uses: CW-1024/theos-action@main
 
-    # 上传构建的 .deb 包
-    - name: Upload .deb Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: WeChatTweak_${{ github.run_number }}
-        path: packages/*.deb
+      - name: Setup GNU Make
+        run: |
+          echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Build package
+        run: |
+          rm -f packages/*
+          make package FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+          make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+          make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+
+      - name: Upload specific Deb packages
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name:  WeChatTweak
+          path: ${{ github.workspace }}/packages/*.deb
